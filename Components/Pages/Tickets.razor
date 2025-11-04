@@ -1,0 +1,222 @@
+@page "/tickets"
+@rendermode InteractiveServer
+@using Microsoft.EntityFrameworkCore
+@inject IDbContextFactory<AppDbContext> DbFactory
+
+<h3>Tickets</h3>
+
+<div class="row g-2 align-items-end mb-3">
+  <div class="col-3">
+    <label class="form-label">Search</label>
+    <input class="form-control" @bind="_search" @bind:event="oninput" placeholder="title, reporter, assignee" />
+  </div>
+  <div class="col-3">
+    <label class="form-label">Status</label>
+    <select class="form-select" @bind="_statusFilter">
+      <option value="">(any)</option>
+      @foreach (var s in Enum.GetValues<TicketStatus>()) {
+        <option value="@s">@s</option>
+      }
+    </select>
+  </div>
+  <div class="col-2">
+    <label class="form-label">Priority</label>
+    <select class="form-select" @bind="_priorityFilter">
+      <option value="">(any)</option>
+      @foreach (var p in Enum.GetValues<TicketPriority>()) {
+        <option value="@p">@p</option>
+      }
+    </select>
+  </div>
+  <div class="col-auto">
+    <button class="btn btn-secondary" @onclick="LoadAsync">Refresh</button>
+  </div>
+</div>
+
+<EditForm Model="_new" OnValidSubmit="CreateAsync">
+  <DataAnnotationsValidator />
+  <div class="row g-2 align-items-end mb-2">
+    <div class="col-4">
+      <label class="form-label">Title</label>
+      <InputText class="form-control" @bind-Value="_new.Title" />
+    </div>
+    <div class="col-3">
+      <label class="form-label">Type</label>
+      <InputSelect class="form-select" @bind-Value="_new.Type">
+        @foreach (var t in Enum.GetValues<TicketType>()) { <option value="@t">@t</option> }
+      </InputSelect>
+    </div>
+    <div class="col-2">
+      <label class="form-label">Priority</label>
+      <InputSelect class="form-select" @bind-Value="_new.Priority">
+        @foreach (var p in Enum.GetValues<TicketPriority>()) { <option value="@p">@p</option> }
+      </InputSelect>
+    </div>
+    <div class="col-3">
+      <label class="form-label">Assignee</label>
+      <InputText class="form-control" @bind-Value="_new.Assignee" />
+    </div>
+    <div class="col-12">
+      <label class="form-label">Description</label>
+      <InputTextArea class="form-control" @bind-Value="_new.Description" rows="3" />
+    </div>
+    <div class="col-auto">
+      <button class="btn btn-primary">Add Ticket</button>
+    </div>
+  </div>
+</EditForm>
+
+<table class="table table-sm align-middle">
+  <thead>
+    <tr>
+      <th>ID</th><th>Title</th><th>Status</th><th>Priority</th><th>Type</th><th>Assignee</th><th>Created</th><th></th>
+    </tr>
+  </thead>
+  <tbody>
+  @foreach (var t in _tickets)
+  {
+    <tr>
+      <td>@t.Id</td>
+      <td>
+        @if (_edit?.Id == t.Id)
+        {
+          <InputText class="form-control form-control-sm" @bind-Value="_edit!.Title" />
+        }
+        else { @t.Title }
+      </td>
+      <td>
+        @if (_edit?.Id == t.Id)
+        {
+          <InputSelect class="form-select form-select-sm" @bind-Value="_edit!.Status">
+            @foreach (var s in Enum.GetValues<TicketStatus>()) { <option value="@s">@s</option> }
+          </InputSelect>
+        }
+        else { @t.Status }
+      </td>
+      <td>
+        @if (_edit?.Id == t.Id)
+        {
+          <InputSelect class="form-select form-select-sm" @bind-Value="_edit!.Priority">
+            @foreach (var p in Enum.GetValues<TicketPriority>()) { <option value="@p">@p</option> }
+          </InputSelect>
+        }
+        else { @t.Priority }
+      </td>
+      <td>
+        @if (_edit?.Id == t.Id)
+        {
+          <InputSelect class="form-select form-select-sm" @bind-Value="_edit!.Type">
+            @foreach (var tp in Enum.GetValues<TicketType>()) { <option value="@tp">@tp</option> }
+          </InputSelect>
+        }
+        else { @t.Type }
+      </td>
+      <td>
+        @if (_edit?.Id == t.Id)
+        {
+          <InputText class="form-control form-control-sm" @bind-Value="_edit!.Assignee" />
+        }
+        else { @t.Assignee }
+      </td>
+      <td>@t.CreatedUtc.ToLocalTime()</td>
+      <td class="text-nowrap">
+        @if (_edit?.Id == t.Id)
+        {
+          <button class="btn btn-sm btn-success me-1" @onclick="SaveAsync">Save</button>
+          <button class="btn btn-sm btn-secondary" @onclick="CancelEdit">Cancel</button>
+        }
+        else
+        {
+          <button class="btn btn-sm btn-outline-primary me-1" @onclick="() => BeginEdit(t)">Edit</button>
+          <button class="btn btn-sm btn-outline-danger" @onclick="() => SoftDeleteAsync(t.Id)">Delete</button>
+        }
+      </td>
+    </tr>
+  }
+  </tbody>
+</table>
+
+@code {
+  List<Ticket> _tickets = [];
+  Ticket _new = new();
+  Ticket? _edit;
+  string _search = "";
+  string? _statusFilter;
+  string? _priorityFilter;
+
+  protected override async Task OnInitializedAsync() => await LoadAsync();
+
+  async Task LoadAsync()
+  {
+    await using var db = await DbFactory.CreateDbContextAsync();
+    var q = db.Tickets.Where(t => !t.IsDeleted);
+
+    if (!string.IsNullOrWhiteSpace(_search))
+    {
+      var s = _search.ToLower();
+      q = q.Where(t =>
+        t.Title.ToLower().Contains(s) ||
+        (t.Description ?? "").ToLower().Contains(s) ||
+        (t.Assignee ?? "").ToLower().Contains(s) ||
+        (t.Reporter ?? "").ToLower().Contains(s));
+    }
+
+    if (Enum.TryParse<TicketStatus>(_statusFilter, out var sFilter))
+      q = q.Where(t => t.Status == sFilter);
+
+    if (Enum.TryParse<TicketPriority>(_priorityFilter, out var pFilter))
+      q = q.Where(t => t.Priority == pFilter);
+
+    _tickets = await q.OrderByDescending(t => t.CreatedUtc).Take(500).ToListAsync();
+  }
+
+  async Task CreateAsync()
+  {
+    await using var db = await DbFactory.CreateDbContextAsync();
+    // set Reporter to a default (later wire to auth user)
+    _new.Reporter = _new.Reporter ?? "you";
+    db.Tickets.Add(_new);
+    await db.SaveChangesAsync();
+    _new = new();
+    await LoadAsync();
+  }
+
+  void BeginEdit(Ticket t) => _edit = new Ticket {
+    Id = t.Id, Title = t.Title, Description = t.Description, Status = t.Status,
+    Priority = t.Priority, Type = t.Type, Reporter = t.Reporter, Assignee = t.Assignee,
+    CreatedUtc = t.CreatedUtc
+  };
+
+  void CancelEdit() => _edit = null;
+
+  async Task SaveAsync()
+  {
+    if (_edit is null) return;
+    await using var db = await DbFactory.CreateDbContextAsync();
+    var t = await db.Tickets.FindAsync(_edit.Id);
+    if (t is null) return;
+
+    t.Title = _edit.Title;
+    t.Description = _edit.Description;
+    t.Status = _edit.Status;
+    t.Priority = _edit.Priority;
+    t.Type = _edit.Type;
+    t.Assignee = _edit.Assignee;
+    t.UpdatedUtc = DateTime.UtcNow;
+
+    await db.SaveChangesAsync();
+    _edit = null;
+    await LoadAsync();
+  }
+
+  async Task SoftDeleteAsync(int id)
+  {
+    await using var db = await DbFactory.CreateDbContextAsync();
+    var t = await db.Tickets.FindAsync(id);
+    if (t is null) return;
+    t.IsDeleted = true;
+    t.UpdatedUtc = DateTime.UtcNow;
+    await db.SaveChangesAsync();
+    await LoadAsync();
+  }
+}
